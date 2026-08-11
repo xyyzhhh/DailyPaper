@@ -2,6 +2,7 @@ import json
 import os
 import time
 from datetime import date, timedelta
+from xml.etree import ElementTree
 
 import requests
 from openai import OpenAI
@@ -13,6 +14,7 @@ HISTORY_FILE = "config/seen_papers.txt"
 BLACKLIST_FILE = "config/blacklisted_venues.txt"
 PREFERENCES_FILE = "config/paper_preferences.json"
 SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 LLM_BASE_URL = "https://4Router.net"
 LLM_MODEL = "gpt-5.6-sol"
 REQUEST_TIMEOUT_SECONDS = 30
@@ -50,19 +52,33 @@ def load_preferences():
 
 
 def request_semantic_scholar(params):
-    """使用 Semantic Scholar 的免 Key 公共额度请求，并处理短暂限流。"""
+    """请求 Semantic Scholar；限流或网络故障时返回 None 以启用备用源。"""
     headers = {"User-Agent": "DailyPaper keyword tracker"}
     for attempt in range(REQUEST_RETRIES):
-        response = requests.get(
-            SEMANTIC_SCHOLAR_SEARCH_URL,
-            params=params,
-            headers=headers,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
+        try:
+            response = requests.get(
+                SEMANTIC_SCHOLAR_SEARCH_URL,
+                params=params,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as error:
+            print(f"Semantic Scholar 网络请求失败：{error}")
+            return None
+
         if response.status_code == 200:
             return response.json()
-        if response.status_code not in {429, 500, 502, 503, 504}:
-            response.raise_for_status()
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            retry_message = f"，建议等待 {retry_after} 秒" if retry_after else ""
+            print(f"Semantic Scholar 公共额度被限流 (429){retry_message}。")
+            return None
+        if response.status_code not in {500, 502, 503, 504}:
+            print(
+                f"Semantic Scholar 请求失败 ({response.status_code})："
+                f"{response.text[:300]}"
+            )
+            return None
 
         wait_seconds = 2**attempt
         print(
@@ -71,7 +87,68 @@ def request_semantic_scholar(params):
         )
         time.sleep(wait_seconds)
 
-    response.raise_for_status()
+    print("Semantic Scholar 持续不可用，将改用 arXiv 备用检索。")
+    return None
+
+
+def request_arxiv(query, max_results):
+    """通过 arXiv 的公开 API 搜索备用论文，并统一成 Semantic Scholar 字段。"""
+    try:
+        response = requests.get(
+            ARXIV_SEARCH_URL,
+            params={
+                "search_query": f'all:"{query.replace(chr(34), "")}"',
+                "start": 0,
+                "max_results": max_results,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+            },
+            headers={"User-Agent": "DailyPaper keyword tracker"},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        print(f"arXiv 备用检索失败：{error}")
+        return []
+
+    atom_namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    try:
+        root = ElementTree.fromstring(response.content)
+    except ElementTree.ParseError as error:
+        print(f"arXiv 返回内容无法解析：{error}")
+        return []
+
+    papers = []
+    for entry in root.findall("atom:entry", atom_namespace):
+        arxiv_url = (entry.findtext("atom:id", default="", namespaces=atom_namespace)).strip()
+        arxiv_id = arxiv_url.rsplit("/", maxsplit=1)[-1]
+        if not arxiv_id:
+            continue
+        published = entry.findtext("atom:published", default="", namespaces=atom_namespace)
+        published_date = published[:10] if published else None
+        authors = [
+            {"name": (author.findtext("atom:name", default="未知", namespaces=atom_namespace)).strip()}
+            for author in entry.findall("atom:author", atom_namespace)
+        ]
+        papers.append(
+            {
+                "paperId": f"ARXIV:{arxiv_id}",
+                "title": " ".join(
+                    entry.findtext("atom:title", default="无标题", namespaces=atom_namespace).split()
+                ),
+                "abstract": " ".join(
+                    entry.findtext("atom:summary", default="", namespaces=atom_namespace).split()
+                ),
+                "authors": authors,
+                "url": arxiv_url,
+                "venue": "arXiv",
+                "externalIds": {"ArXiv": arxiv_id},
+                "publicationDate": published_date,
+                "year": int(published_date[:4]) if published_date else None,
+                "citationCount": 0,
+            }
+        )
+    return papers
 
 
 def paper_date(paper):
@@ -146,22 +223,32 @@ def get_paper_recommendations():
         "publicationDate,year,citationCount"
     )
 
-    print(
-        f"使用 Semantic Scholar 免 Key 公共额度，检索 "
-        f"{earliest_date.isoformat()} 以来的关键词论文..."
-    )
+    print(f"检索 {earliest_date.isoformat()} 以来的关键词论文...")
+    semantic_scholar_available = True
     for topic in preferences["topics"]:
         topic_name = topic["name"]
         query = topic["query"]
         print(f"检索主题：{topic_name} ({query})")
-        result = request_semantic_scholar(
-            {
-                "query": query,
-                "limit": preferences["max_results_per_query"],
-                "fields": fields,
-            }
-        )
-        for paper in result.get("data", []):
+        if semantic_scholar_available:
+            print("来源：Semantic Scholar 免 Key 公共额度")
+            result = request_semantic_scholar(
+                {
+                    "query": query,
+                    "limit": preferences["max_results_per_query"],
+                    "fields": fields,
+                }
+            )
+            if result is None:
+                semantic_scholar_available = False
+                print("切换到 arXiv 免 Key 备用检索。")
+                raw_papers = request_arxiv(query, preferences["max_results_per_query"])
+            else:
+                raw_papers = result.get("data", [])
+        else:
+            print("来源：arXiv 免 Key 备用检索")
+            raw_papers = request_arxiv(query, preferences["max_results_per_query"])
+
+        for paper in raw_papers:
             paper_id = paper.get("paperId")
             if not paper_id or paper_id in seen_papers:
                 continue
