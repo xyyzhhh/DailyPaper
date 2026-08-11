@@ -298,6 +298,49 @@ def get_paper_url(paper):
     return paper.get("url") or f"https://www.semanticscholar.org/paper/{paper['paperId']}"
 
 
+def extract_llm_summary(response):
+    """兼容 OpenAI SDK 对象、OpenAI JSON 和代理直接返回的文本。"""
+    if isinstance(response, str):
+        text_response = response.strip()
+        if not text_response:
+            raise RuntimeError("LLM 返回了空字符串。")
+        try:
+            response = json.loads(text_response)
+        except json.JSONDecodeError:
+            return text_response
+
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        dumped_response = model_dump()
+        if isinstance(dumped_response, dict):
+            response = dumped_response
+
+    if isinstance(response, dict):
+        choices = response.get("choices") or []
+        if not choices:
+            raise RuntimeError("LLM JSON 响应中缺少 choices。")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+    else:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise RuntimeError("LLM 响应中缺少 choices。")
+        message = getattr(choices[0], "message", None)
+        content = getattr(message, "content", None)
+
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        text_parts = [
+            item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
+            for item in content
+        ]
+        joined_text = "".join(text_parts).strip()
+        if joined_text:
+            return joined_text
+    raise RuntimeError("LLM 响应中缺少可用的 message.content。")
+
+
 def summarize_papers_with_llm(papers):
     """使用 gpt-5.6-sol 为每篇论文生成结构化中文阅读笔记。"""
     if not LLM_API_KEY:
@@ -332,7 +375,7 @@ def summarize_papers_with_llm(papers):
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
         )
-        summary = (response.choices[0].message.content or "").strip()
+        summary = extract_llm_summary(response)
         report_parts.append(
             f"## {index}. [{title}]({url})\n"
             f"**作者：** {authors}\n\n"

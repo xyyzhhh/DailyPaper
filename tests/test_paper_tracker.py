@@ -98,6 +98,23 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual("Bearer test-proxy-token", request_headers["Authorization"])
         self.assertNotIn("x-api-key", request_headers)
 
+    def test_llm_summary_accepts_proxy_plain_text(self):
+        self.assertEqual(
+            "**问题**：代理返回的阅读笔记",
+            paper_tracker.extract_llm_summary("  **问题**：代理返回的阅读笔记  "),
+        )
+
+    def test_llm_summary_accepts_openai_json(self):
+        response = {"choices": [{"message": {"content": "**方法**：JSON 响应"}}]}
+
+        self.assertEqual("**方法**：JSON 响应", paper_tracker.extract_llm_summary(response))
+
+    def test_llm_summary_accepts_openai_sdk_object(self):
+        response = Mock()
+        response.choices = [Mock(message=Mock(content="**结果**：SDK 响应"))]
+
+        self.assertEqual("**结果**：SDK 响应", paper_tracker.extract_llm_summary(response))
+
 
 if __name__ == "__main__":
     unittest.main()
