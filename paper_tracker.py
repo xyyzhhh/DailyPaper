@@ -10,6 +10,11 @@ from xml.etree import ElementTree
 import requests
 from openai import OpenAI
 
+try:
+    import pymupdf
+except ImportError:
+    pymupdf = None
+
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 S2_API_KEY = os.getenv("S2_API_Key") or os.getenv("S2_API_KEY")
 S2_PROXY_API_KEY = os.getenv("S2_PROXY_API_KEY")
@@ -51,9 +56,10 @@ def load_preferences():
         "high_impact_journals",
         "search_lookback_days",
         "max_results_per_query",
-        "min_papers_per_digest",
         "max_papers_per_digest",
-        "extra_paper_min_query_matches",
+        "max_fulltext_pages",
+        "max_fulltext_characters",
+        "fulltext_chunk_characters",
     }
     missing_keys = required_keys - preferences.keys()
     if missing_keys:
@@ -335,16 +341,8 @@ def rank_paper(paper, preferences):
 
 
 def select_papers_for_digest(ranked_papers, preferences):
-    """保底选择三篇，只有多关键词匹配的论文才扩展到第四、第五篇。"""
-    minimum_count = preferences["min_papers_per_digest"]
-    maximum_count = preferences["max_papers_per_digest"]
-    extra_match_threshold = preferences["extra_paper_min_query_matches"]
-    selected_papers = ranked_papers[:minimum_count]
-
-    for paper in ranked_papers[minimum_count:maximum_count]:
-        if len(paper.get("matchedQueries", [])) >= extra_match_threshold:
-            selected_papers.append(paper)
-    return selected_papers
+    """按相关性排序后，固定选择每日上限内的论文。"""
+    return ranked_papers[: preferences["max_papers_per_digest"]]
 
 
 def get_paper_recommendations():
@@ -355,7 +353,7 @@ def get_paper_recommendations():
     earliest_date = date.today() - timedelta(days=preferences["search_lookback_days"])
     papers_by_id = {}
     fields = (
-        "paperId,title,abstract,authors,url,venue,publicationVenue,externalIds,"
+        "paperId,title,abstract,authors,url,venue,publicationVenue,externalIds,openAccessPdf,"
         "publicationDate,year,citationCount"
     )
 
@@ -466,6 +464,73 @@ def get_paper_url(paper):
     return paper.get("url") or f"https://www.semanticscholar.org/paper/{paper['paperId']}"
 
 
+def get_open_access_pdf_url(paper):
+    """优先使用 S2 标记的开放 PDF；其次使用 arXiv 的合法公开 PDF。"""
+    open_access_pdf = paper.get("openAccessPdf") or {}
+    pdf_url = (open_access_pdf.get("url") or "").strip()
+    if pdf_url.startswith(("https://", "http://")):
+        return pdf_url
+
+    external_ids = paper.get("externalIds") or {}
+    arxiv_id = (external_ids.get("ArXiv") or "").strip()
+    if arxiv_id:
+        return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+    return None
+
+
+def download_open_access_pdf(pdf_url):
+    """下载开放 PDF，仅接受实际的 PDF 文件内容。"""
+    try:
+        response = requests.get(
+            pdf_url,
+            headers={"User-Agent": "DailyPaper full-text reader"},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        print(f"开放 PDF 下载失败：{error}")
+        return None
+
+    pdf_content = response.content
+    if not pdf_content.startswith(b"%PDF"):
+        print("开放全文链接未返回 PDF，降级为摘要速读。")
+        return None
+    return pdf_content
+
+
+def extract_pdf_text(pdf_content, preferences):
+    """从开放 PDF 中提取受页数和字符数限制的正文。"""
+    if pymupdf is None:
+        print("未安装 PyMuPDF，降级为摘要速读。")
+        return None, 0
+
+    document = None
+    try:
+        document = pymupdf.open(stream=pdf_content, filetype="pdf")
+        page_count = min(document.page_count, preferences["max_fulltext_pages"])
+        page_texts = [document.load_page(index).get_text("text") for index in range(page_count)]
+        full_text = "\n".join(page_texts).strip()
+    except Exception as error:
+        print(f"开放 PDF 解析失败：{error}")
+        return None, 0
+    finally:
+        if document is not None:
+            document.close()
+
+    if not full_text:
+        print("开放 PDF 未提取到正文，降级为摘要速读。")
+        return None, 0
+    return full_text[: preferences["max_fulltext_characters"]], page_count
+
+
+def split_fulltext(full_text, chunk_characters):
+    """按字符窗口切分全文，避免单次模型请求过长。"""
+    return [
+        full_text[start : start + chunk_characters]
+        for start in range(0, len(full_text), chunk_characters)
+    ]
+
+
 def validate_llm_summary(content):
     """确保模型输出是正文而不是网关返回的 HTML 页面。"""
     if not isinstance(content, str) or not content.strip():
@@ -523,6 +588,66 @@ def extract_llm_summary(response):
     raise RuntimeError("LLM 响应中缺少可用的 message.content。")
 
 
+def ask_llm(client, prompt):
+    """调用 LLM 并解析不同代理可能返回的响应格式。"""
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return extract_llm_summary(response)
+
+
+def summarize_abstract_with_llm(client, title, abstract):
+    """在无法取得开放全文时基于摘要生成阅读笔记。"""
+    prompt = f"""你是一名严谨的科研助理。只能依据给出的标题和摘要，用中文生成一份简洁、具体的论文阅读笔记。不得补造实验设置、数值、结论或局限；信息不足时明确写“摘要未说明”。不要输出任何客套话、前言或额外小标题。
+
+严格使用以下五个 Markdown 字段，每个字段 1–3 句：
+**问题**：
+**方法**：
+**结果**：
+**局限**：
+**可复用点**：
+
+标题：{title}
+摘要：{abstract}
+"""
+    return ask_llm(client, prompt)
+
+
+def summarize_fulltext_with_llm(client, title, abstract, full_text, preferences):
+    """先分块提取全文证据，再汇总为完整阅读笔记。"""
+    chunk_notes = []
+    chunks = split_fulltext(full_text, preferences["fulltext_chunk_characters"])
+    for index, chunk in enumerate(chunks, start=1):
+        chunk_notes.append(
+            ask_llm(
+                client,
+                f"""你正在精读论文《{title}》的第 {index}/{len(chunks)} 个正文片段。仅依据该片段，提取与研究问题、方法细节、实验设置和结果、局限、可复用实现线索有关的具体证据。若片段未说明请明确标注。使用简洁中文要点，不要客套话。
+
+正文片段：
+{chunk}
+""",
+            )
+        )
+
+    evidence = "\n\n---\n\n".join(chunk_notes)
+    prompt = f"""你是一名严谨的科研助理。请基于标题、摘要和分块全文证据，生成详细但紧凑的中文论文阅读笔记。不得补造未在材料中出现的实验设置、数值、结论或局限；信息不足时明确写“全文未说明”。不要输出任何客套话、前言或额外小标题。
+
+严格使用以下五个 Markdown 字段，每个字段 2–4 句：
+**问题**：
+**方法**：
+**结果**：
+**局限**：
+**可复用点**：
+
+标题：{title}
+摘要：{abstract}
+分块全文证据：
+{evidence}
+"""
+    return ask_llm(client, prompt)
+
+
 def summarize_papers_with_llm(papers):
     """使用 gpt-5.6-sol 为每篇论文生成结构化中文阅读笔记。"""
     if not LLM_API_KEY:
@@ -540,24 +665,24 @@ def summarize_papers_with_llm(papers):
         publication_date = paper.get("publicationDate") or paper.get("year") or "未知日期"
         topics = "、".join(paper.get("matchedTopics", []))
         url = get_paper_url(paper)
+        pdf_url = get_open_access_pdf_url(paper)
+        summary = None
+        reading_level = "摘要速读"
+        if pdf_url:
+            pdf_content = download_open_access_pdf(pdf_url)
+            if pdf_content:
+                full_text, page_count = extract_pdf_text(pdf_content, preferences)
+                if full_text:
+                    try:
+                        summary = summarize_fulltext_with_llm(
+                            client, title, abstract, full_text, preferences
+                        )
+                        reading_level = f"全文精读（开放 PDF，已解析 {page_count} 页）"
+                    except Exception as error:
+                        print(f"全文总结失败，降级为摘要速读：{error}")
 
-        prompt = f"""你是一名严谨的科研助理。只能依据给出的标题和摘要，用中文生成一份简洁、具体的论文阅读笔记。不得补造实验设置、数值、结论或局限；信息不足时明确写“摘要未说明”。不要输出任何客套话、前言或额外小标题。
-
-严格使用以下五个 Markdown 字段，每个字段 1–3 句：
-**问题**：
-**方法**：
-**结果**：
-**局限**：
-**可复用点**：
-
-标题：{title}
-摘要：{abstract}
-"""
-        response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        summary = extract_llm_summary(response)
+        if summary is None:
+            summary = summarize_abstract_with_llm(client, title, abstract)
         report_parts.append(
             f"## {index}. [{title}]({url})\n"
             f"**作者：** {authors}\n\n"
@@ -567,6 +692,7 @@ def summarize_papers_with_llm(papers):
             f"**发表时间：** {publication_date}\n\n"
             f"**来源优先级：** {source_label}\n\n"
             f"**匹配研究方向：** {topics}\n\n"
+            f"**阅读级别：** {reading_level}\n\n"
             f"{summary}"
         )
 

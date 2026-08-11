@@ -138,22 +138,77 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual("—", abbreviation)
         self.assertEqual("未收录", ccf_rank)
 
-    def test_daily_digest_uses_three_to_five_papers(self):
-        self.assertEqual(3, self.preferences["min_papers_per_digest"])
-        self.assertEqual(5, self.preferences["max_papers_per_digest"])
+    def test_daily_digest_is_limited_to_three_papers(self):
+        self.assertEqual(3, self.preferences["max_papers_per_digest"])
 
         ranked_papers = [
             {"paperId": str(index), "matchedQueries": ["query"]}
-            for index in range(3)
-        ] + [
-            {"paperId": "3", "matchedQueries": ["query one", "query two"]},
-            {"paperId": "4", "matchedQueries": ["query one", "query two"]},
+            for index in range(5)
         ]
 
         selected_papers = paper_tracker.select_papers_for_digest(
             ranked_papers, self.preferences
         )
-        self.assertEqual(5, len(selected_papers))
+        self.assertEqual(3, len(selected_papers))
+
+    def test_open_access_pdf_prefers_s2_then_arxiv(self):
+        self.assertEqual(
+            "https://example.test/open-paper.pdf",
+            paper_tracker.get_open_access_pdf_url(
+                {
+                    "openAccessPdf": {"url": "https://example.test/open-paper.pdf"},
+                    "externalIds": {"ArXiv": "2608.00001"},
+                }
+            ),
+        )
+        self.assertEqual(
+            "https://arxiv.org/pdf/2608.00001.pdf",
+            paper_tracker.get_open_access_pdf_url(
+                {"externalIds": {"ArXiv": "2608.00001"}}
+            ),
+        )
+
+    @patch("paper_tracker.requests.get")
+    def test_non_pdf_open_access_response_is_rejected(self, mock_get):
+        response = Mock(content=b"<html>not a PDF</html>")
+        mock_get.return_value = response
+
+        self.assertIsNone(
+            paper_tracker.download_open_access_pdf("https://example.test/not-a-pdf")
+        )
+
+    def test_fulltext_is_split_into_configured_chunks(self):
+        self.assertEqual(
+            ["abcd", "efgh", "ij"], paper_tracker.split_fulltext("abcdefghij", 4)
+        )
+
+    @unittest.skipIf(paper_tracker.pymupdf is None, "PyMuPDF is not installed")
+    def test_pdf_text_is_extracted_with_page_limit(self):
+        document = paper_tracker.pymupdf.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "Open access full text")
+        pdf_content = document.tobytes()
+        document.close()
+
+        preferences = dict(self.preferences)
+        preferences["max_fulltext_pages"] = 1
+        preferences["max_fulltext_characters"] = 100
+        full_text, page_count = paper_tracker.extract_pdf_text(pdf_content, preferences)
+
+        self.assertEqual(1, page_count)
+        self.assertIn("Open access full text", full_text)
+
+    @patch("paper_tracker.ask_llm", side_effect=["片段一", "片段二", "最终笔记"])
+    def test_fulltext_summary_uses_chunks_then_final_merge(self, mock_ask_llm):
+        preferences = dict(self.preferences)
+        preferences["fulltext_chunk_characters"] = 4
+
+        summary = paper_tracker.summarize_fulltext_with_llm(
+            Mock(), "论文标题", "论文摘要", "abcdefgh", preferences
+        )
+
+        self.assertEqual("最终笔记", summary)
+        self.assertEqual(3, mock_ask_llm.call_count)
 
     def test_s2_rate_limiter_waits_for_one_second_interval(self):
         with (

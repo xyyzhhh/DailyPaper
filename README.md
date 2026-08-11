@@ -8,7 +8,7 @@
 - **检索方式**：关键词匹配，不再依赖正向或负向 seed paper。
 - **研究方向**：大语言模型/生成式模型水印、大模型指纹与模型溯源、LLM 账号/用户/作者识别、医学肠道内镜模型。
 - **优先来源**：网络安全 CCF A → 人工智能 CCF A / EMNLP → 高影响力期刊 → 其他会议或期刊 → arXiv。
-- **阅读笔记**：每天保底推送 3 篇；多关键词匹配更强时可扩展至 5 篇。每篇均包含作者、会议/期刊缩写、CCF 等级、发表时间、匹配方向以及“问题—方法—结果—局限—可复用点”。
+- **阅读笔记**：每天最多推送 3 篇。优先下载并精读合法开放 PDF；无法获取或解析全文时自动降级为摘要速读。每篇均包含作者、会议/期刊缩写、CCF 等级、发表时间、匹配方向以及“问题—方法—结果—局限—可复用点”。
 - **模型**：通过 OpenAI 兼容端点 `https://4router.net/v1` 调用 `gpt-5.6-sol`。
 
 ## 配置
@@ -34,7 +34,8 @@
 - `high_impact_journals`：优先收录的高影响力期刊别名。
 - `search_lookback_days`：每次检索的回溯窗口，默认 30 天。
 - `max_results_per_query`：单个关键词的查询量。
-- `min_papers_per_digest`、`max_papers_per_digest`、`extra_paper_min_query_matches`：每日保底数量、最高数量，以及扩展到第 4–5 篇时所需的多关键词匹配数。
+- `max_papers_per_digest`：每日推送论文上限，当前为 3。
+- `max_fulltext_pages`、`max_fulltext_characters`、`fulltext_chunk_characters`：开放 PDF 的解析页数、总文本和单块精读上限。
 
 ### 去重与黑名单
 
@@ -42,6 +43,8 @@
 - `config/blacklisted_venues.txt` 每行一个会议或期刊名称片段；匹配到的来源会被过滤。
 
 旧的 `seed_paper_positive.csv` 与 `seed_paper_negative.csv` 不再参与检索，可留空或删除。
+
+全文精读只使用 Semantic Scholar 标记的开放 PDF 或 arXiv PDF，不会尝试绕过出版商的登录、付费或访问控制。
 
 ## 手动运行
 
