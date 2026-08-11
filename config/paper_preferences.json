@@ -1,7 +1,9 @@
 {
   "search_lookback_days": 30,
   "max_results_per_query": 30,
-  "max_papers_per_digest": 3,
+  "min_papers_per_digest": 3,
+  "max_papers_per_digest": 5,
+  "extra_paper_min_query_matches": 2,
   "topics": [
     {
       "name": "大语言模型/生成式模型水印",

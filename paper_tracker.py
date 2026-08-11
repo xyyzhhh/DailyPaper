@@ -9,22 +9,19 @@ from openai import OpenAI
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY")
-S2_PROXY_API_KEY = os.getenv(
-    "S2_PROXY_API_KEY", "sk-EjxPNyglgeZrjtHZ1cAAZHUpZr5HHuYPutfkCrOz8sGnAfij"
-)
+S2_API_KEY = os.getenv("S2_API_Key") or os.getenv("S2_API_KEY")
 
 HISTORY_FILE = "config/seen_papers.txt"
 BLACKLIST_FILE = "config/blacklisted_venues.txt"
 PREFERENCES_FILE = "config/paper_preferences.json"
-S2_PROXY_BASE_URL = os.getenv("S2_PROXY_BASE_URL", "https://s2api.ominiai.cn/s2").rstrip(
-    "/"
-)
-SEMANTIC_SCHOLAR_SEARCH_URL = f"{S2_PROXY_BASE_URL}/graph/v1/paper/search"
+SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://4router.net/v1").rstrip("/")
 LLM_MODEL = "gpt-5.6-sol"
 REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_RETRIES = 3
+S2_MIN_REQUEST_INTERVAL_SECONDS = 1.0
+LAST_S2_REQUEST_TIME = None
 
 
 def read_list(file_path):
@@ -46,7 +43,9 @@ def load_preferences():
         "high_impact_journals",
         "search_lookback_days",
         "max_results_per_query",
+        "min_papers_per_digest",
         "max_papers_per_digest",
+        "extra_paper_min_query_matches",
     }
     missing_keys = required_keys - preferences.keys()
     if missing_keys:
@@ -56,14 +55,31 @@ def load_preferences():
     return preferences
 
 
+def wait_for_s2_rate_limit():
+    """确保同一进程内所有官方 S2 请求至少相隔一秒。"""
+    global LAST_S2_REQUEST_TIME
+
+    now = time.monotonic()
+    if LAST_S2_REQUEST_TIME is not None:
+        remaining_seconds = S2_MIN_REQUEST_INTERVAL_SECONDS - (now - LAST_S2_REQUEST_TIME)
+        if remaining_seconds > 0:
+            time.sleep(remaining_seconds)
+    LAST_S2_REQUEST_TIME = time.monotonic()
+
+
 def request_semantic_scholar(params):
-    """通过 S2 代理请求 Semantic Scholar；失败时返回 None 以启用备用源。"""
+    """通过官方 Semantic Scholar Graph API 请求；失败时返回 None。"""
+    if not S2_API_KEY:
+        print("缺少 S2_API_Key GitHub Secret，改用 arXiv 备用检索。")
+        return None
+
     headers = {
-        "Authorization": f"Bearer {S2_PROXY_API_KEY}",
+        "x-api-key": S2_API_KEY,
         "User-Agent": "DailyPaper keyword tracker",
     }
     for attempt in range(REQUEST_RETRIES):
         try:
+            wait_for_s2_rate_limit()
             response = requests.get(
                 SEMANTIC_SCHOLAR_SEARCH_URL,
                 params=params,
@@ -71,7 +87,7 @@ def request_semantic_scholar(params):
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except requests.RequestException as error:
-            print(f"S2 代理网络请求失败：{error}")
+            print(f"Semantic Scholar 网络请求失败：{error}")
             return None
 
         if response.status_code == 200:
@@ -79,23 +95,25 @@ def request_semantic_scholar(params):
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             retry_message = f"，建议等待 {retry_after} 秒" if retry_after else ""
-            print(f"S2 代理请求被限流 (429){retry_message}。")
-            return None
+            wait_seconds = float(retry_after) if retry_after and retry_after.isdigit() else 2
+            print(f"Semantic Scholar 请求被限流 (429){retry_message}，{wait_seconds} 秒后重试。")
+            time.sleep(wait_seconds)
+            continue
         if response.status_code not in {500, 502, 503, 504}:
             print(
-                f"S2 代理请求失败 ({response.status_code})："
+                f"Semantic Scholar 请求失败 ({response.status_code})："
                 f"{response.text[:300]}"
             )
             return None
 
         wait_seconds = 2**attempt
         print(
-            f"S2 代理暂时不可用 ({response.status_code})，"
+            f"Semantic Scholar 暂时不可用 ({response.status_code})，"
             f"{wait_seconds} 秒后重试..."
         )
         time.sleep(wait_seconds)
 
-    print("S2 代理持续不可用，将改用 arXiv 备用检索。")
+    print("Semantic Scholar 持续不可用，将改用 arXiv 备用检索。")
     return None
 
 
@@ -233,12 +251,26 @@ def is_recent_enough(paper, earliest_date):
 
 
 def rank_paper(paper, preferences):
-    """先按来源优先级，再按发表日期和引用数排序。"""
+    """先按来源优先级和关键词相似度，再按发表日期和引用数排序。"""
     priority, _ = source_priority(paper, preferences)
     publication_date = paper_date(paper) or date.min
     citation_count = paper.get("citationCount") or 0
     topic_matches = len(paper.get("matchedTopics", []))
-    return priority, topic_matches, publication_date, citation_count
+    query_matches = len(paper.get("matchedQueries", []))
+    return priority, query_matches, topic_matches, publication_date, citation_count
+
+
+def select_papers_for_digest(ranked_papers, preferences):
+    """保底选择三篇，只有多关键词匹配的论文才扩展到第四、第五篇。"""
+    minimum_count = preferences["min_papers_per_digest"]
+    maximum_count = preferences["max_papers_per_digest"]
+    extra_match_threshold = preferences["extra_paper_min_query_matches"]
+    selected_papers = ranked_papers[:minimum_count]
+
+    for paper in ranked_papers[minimum_count:maximum_count]:
+        if len(paper.get("matchedQueries", [])) >= extra_match_threshold:
+            selected_papers.append(paper)
+    return selected_papers
 
 
 def get_paper_recommendations():
@@ -254,13 +286,13 @@ def get_paper_recommendations():
     )
 
     print(f"检索 {earliest_date.isoformat()} 以来的关键词论文...")
-    s2_proxy_available = True
+    semantic_scholar_available = True
     for topic in preferences["topics"]:
         topic_name = topic["name"]
         for query in topic["queries"]:
             print(f"检索主题：{topic_name} ({query})")
-            if s2_proxy_available:
-                print("来源：S2 代理服务")
+            if semantic_scholar_available:
+                print("来源：官方 Semantic Scholar API")
                 result = request_semantic_scholar(
                     {
                         "query": query,
@@ -269,7 +301,7 @@ def get_paper_recommendations():
                     }
                 )
                 if result is None:
-                    s2_proxy_available = False
+                    semantic_scholar_available = False
                     print("切换到 arXiv 免 Key 备用检索。")
                     raw_papers = request_arxiv(
                         query, preferences["max_results_per_query"]
@@ -297,13 +329,16 @@ def get_paper_recommendations():
                 matched_topics = stored_paper.setdefault("matchedTopics", [])
                 if topic_name not in matched_topics:
                     matched_topics.append(topic_name)
+                matched_queries = stored_paper.setdefault("matchedQueries", [])
+                if query not in matched_queries:
+                    matched_queries.append(query)
 
     ranked_papers = sorted(
         papers_by_id.values(),
         key=lambda paper: rank_paper(paper, preferences),
         reverse=True,
     )
-    selected_papers = ranked_papers[: preferences["max_papers_per_digest"]]
+    selected_papers = select_papers_for_digest(ranked_papers, preferences)
     print(f"筛选得到 {len(selected_papers)} 篇未读论文。")
     return selected_papers
 

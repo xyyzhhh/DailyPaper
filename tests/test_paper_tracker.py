@@ -98,26 +98,53 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual("—", abbreviation)
         self.assertEqual("未收录", ccf_rank)
 
-    def test_daily_digest_limit_is_three(self):
-        self.assertEqual(3, self.preferences["max_papers_per_digest"])
+    def test_daily_digest_uses_three_to_five_papers(self):
+        self.assertEqual(3, self.preferences["min_papers_per_digest"])
+        self.assertEqual(5, self.preferences["max_papers_per_digest"])
 
+        ranked_papers = [
+            {"paperId": str(index), "matchedQueries": ["query"]}
+            for index in range(3)
+        ] + [
+            {"paperId": "3", "matchedQueries": ["query one", "query two"]},
+            {"paperId": "4", "matchedQueries": ["query one", "query two"]},
+        ]
+
+        selected_papers = paper_tracker.select_papers_for_digest(
+            ranked_papers, self.preferences
+        )
+        self.assertEqual(5, len(selected_papers))
+
+    def test_s2_rate_limiter_waits_for_one_second_interval(self):
+        with (
+            patch.object(paper_tracker, "LAST_S2_REQUEST_TIME", 10.0),
+            patch("paper_tracker.time.monotonic", side_effect=[10.25, 11.0]),
+            patch("paper_tracker.time.sleep") as mock_sleep,
+        ):
+            paper_tracker.wait_for_s2_rate_limit()
+            self.assertEqual(11.0, paper_tracker.LAST_S2_REQUEST_TIME)
+
+        mock_sleep.assert_called_once_with(0.75)
+
+    @patch("paper_tracker.wait_for_s2_rate_limit")
     @patch("paper_tracker.requests.get")
-    def test_s2_proxy_uses_bearer_token_and_proxy_url(self, mock_get):
+    def test_official_s2_uses_api_key_and_official_url(self, mock_get, mock_wait):
         response = Mock(status_code=200)
         response.json.return_value = {"data": []}
         mock_get.return_value = response
 
-        with patch.object(paper_tracker, "S2_PROXY_API_KEY", "test-proxy-token"):
+        with patch.object(paper_tracker, "S2_API_KEY", "test-s2-token"):
             result = paper_tracker.request_semantic_scholar({"query": "watermarking"})
 
         self.assertEqual({"data": []}, result)
         request_url = mock_get.call_args.args[0]
         request_headers = mock_get.call_args.kwargs["headers"]
         self.assertEqual(
-            "https://s2api.ominiai.cn/s2/graph/v1/paper/search", request_url
+            "https://api.semanticscholar.org/graph/v1/paper/search", request_url
         )
-        self.assertEqual("Bearer test-proxy-token", request_headers["Authorization"])
-        self.assertNotIn("x-api-key", request_headers)
+        self.assertEqual("test-s2-token", request_headers["x-api-key"])
+        self.assertNotIn("Authorization", request_headers)
+        mock_wait.assert_called_once()
 
     def test_llm_summary_accepts_proxy_plain_text(self):
         self.assertEqual(

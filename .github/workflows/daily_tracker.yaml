@@ -26,7 +26,7 @@ jobs:
 
       - name: Run Script
         env:
-          S2_PROXY_API_KEY: ${{ secrets.S2_PROXY_API_KEY }}
+          S2_API_Key: ${{ secrets.S2_API_Key }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: python3 paper_tracker.py

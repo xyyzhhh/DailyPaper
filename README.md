@@ -1,6 +1,6 @@
 # 每日学术论文追踪器
 
-这是一个通过 GitHub Actions 每天自动运行的论文追踪器：使用 S2 代理访问 Semantic Scholar 按关键词检索，按来源优先级筛选，再将结构化中文阅读笔记推送到 Server 酱。
+这是一个通过 GitHub Actions 每天自动运行的论文追踪器：使用官方 Semantic Scholar API 按关键词检索，按来源优先级筛选，再将结构化中文阅读笔记推送到 Server 酱。
 
 ## 当前定制
 
@@ -8,7 +8,7 @@
 - **检索方式**：关键词匹配，不再依赖正向或负向 seed paper。
 - **研究方向**：大语言模型/生成式模型水印、大模型指纹与模型溯源、LLM 账号/用户/作者识别、医学肠道内镜模型。
 - **优先来源**：网络安全 CCF A → 人工智能 CCF A / EMNLP → 高影响力期刊 → 其他会议或期刊 → arXiv。
-- **阅读笔记**：每天至多推送 3 篇；每篇均包含作者、会议/期刊缩写、CCF 等级、发表时间、匹配方向以及“问题—方法—结果—局限—可复用点”。
+- **阅读笔记**：每天保底推送 3 篇；多关键词匹配更强时可扩展至 5 篇。每篇均包含作者、会议/期刊缩写、CCF 等级、发表时间、匹配方向以及“问题—方法—结果—局限—可复用点”。
 - **模型**：通过 OpenAI 兼容端点 `https://4router.net/v1` 调用 `gpt-5.6-sol`。
 
 ## 配置
@@ -17,11 +17,11 @@
 
 在仓库的 `Settings` → `Secrets and variables` → `Actions` 添加以下两个 Secret：
 
-- `S2_PROXY_API_KEY`：S2 代理 API Key；在 GitHub Actions 中应配置为 Secret，覆盖代码的本地默认值。
+- `S2_API_Key`：官方 Semantic Scholar API Key。
 - `LLM_API_KEY`：4Router 的 API Key。
 - `SERVERCHAN_KEY`：Server 酱 SendKey。
 
-无需添加 `S2_API_KEY`。脚本通过 `https://s2api.ominiai.cn/s2` 代理访问 Semantic Scholar，并在代理不可用时自动回退到 arXiv 公开 API。
+脚本通过官方 `https://api.semanticscholar.org/graph/v1` 接口访问 Semantic Scholar，并在进程内将请求严格节流为每秒至多一次；官方服务持续不可用时自动回退到 arXiv 公开 API。
 
 ### 论文偏好
 
@@ -31,7 +31,8 @@
 - `venue_metadata`：会议/期刊别名、缩写、CCF 等级与来源优先级。
 - `high_impact_journals`：优先收录的高影响力期刊别名。
 - `search_lookback_days`：每次检索的回溯窗口，默认 30 天。
-- `max_results_per_query`、`max_papers_per_digest`：单个关键词查询量和每日推送上限。
+- `max_results_per_query`：单个关键词的查询量。
+- `min_papers_per_digest`、`max_papers_per_digest`、`extra_paper_min_query_matches`：每日保底数量、最高数量，以及扩展到第 4–5 篇时所需的多关键词匹配数。
 
 ### 去重与黑名单
 
