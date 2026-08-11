@@ -1,0 +1,65 @@
+{
+  "search_lookback_days": 30,
+  "max_results_per_query": 100,
+  "max_papers_per_digest": 10,
+  "topics": [
+    {
+      "name": "大模型水印",
+      "query": "large language model watermarking"
+    },
+    {
+      "name": "大模型指纹",
+      "query": "large language model fingerprinting"
+    },
+    {
+      "name": "LLM 账号与用户识别",
+      "query": "large language model account user identification"
+    },
+    {
+      "name": "用户识别",
+      "query": "user identification"
+    },
+    {
+      "name": "医学肠道内镜模型",
+      "query": "gastrointestinal endoscopy deep learning"
+    }
+  ],
+  "preferred_security_venues": [
+    "IEEE Symposium on Security and Privacy",
+    "USENIX Security Symposium",
+    "ACM SIGSAC Conference on Computer and Communications Security",
+    "Network and Distributed System Security Symposium",
+    "NDSS"
+  ],
+  "preferred_ai_venues": [
+    "AAAI Conference on Artificial Intelligence",
+    "Conference on Neural Information Processing Systems",
+    "NeurIPS",
+    "International Conference on Machine Learning",
+    "ICML",
+    "International Joint Conference on Artificial Intelligence",
+    "IJCAI",
+    "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+    "CVPR",
+    "Conference on Empirical Methods in Natural Language Processing",
+    "EMNLP"
+  ],
+  "high_impact_journals": [
+    "Nature Machine Intelligence",
+    "Nature",
+    "Science",
+    "Cell",
+    "The Lancet",
+    "New England Journal of Medicine",
+    "JAMA",
+    "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+    "IEEE Transactions on Information Forensics and Security",
+    "IEEE Transactions on Dependable and Secure Computing",
+    "IEEE Transactions on Medical Imaging",
+    "Medical Image Analysis",
+    "Gastrointestinal Endoscopy",
+    "Endoscopy",
+    "Artificial Intelligence",
+    "Journal of Machine Learning Research"
+  ]
+}
