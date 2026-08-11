@@ -21,7 +21,7 @@ S2_PROXY_BASE_URL = os.getenv("S2_PROXY_BASE_URL", "https://s2api.ominiai.cn/s2"
 )
 SEMANTIC_SCHOLAR_SEARCH_URL = f"{S2_PROXY_BASE_URL}/graph/v1/paper/search"
 ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
-LLM_BASE_URL = "https://4Router.net"
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://4router.net/v1").rstrip("/")
 LLM_MODEL = "gpt-5.6-sol"
 REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_RETRIES = 3
@@ -298,6 +298,20 @@ def get_paper_url(paper):
     return paper.get("url") or f"https://www.semanticscholar.org/paper/{paper['paperId']}"
 
 
+def validate_llm_summary(content):
+    """确保模型输出是正文而不是网关返回的 HTML 页面。"""
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("LLM 响应中缺少可用的 message.content。")
+
+    summary = content.strip()
+    html_markers = ("<!doctype html", "<html", "<head", "<body")
+    if any(marker in summary.lower() for marker in html_markers):
+        raise RuntimeError(
+            "LLM 返回了 HTML 页面而非模型正文；请检查 LLM_BASE_URL 和代理鉴权配置。"
+        )
+    return summary
+
+
 def extract_llm_summary(response):
     """兼容 OpenAI SDK 对象、OpenAI JSON 和代理直接返回的文本。"""
     if isinstance(response, str):
@@ -307,7 +321,7 @@ def extract_llm_summary(response):
         try:
             response = json.loads(text_response)
         except json.JSONDecodeError:
-            return text_response
+            return validate_llm_summary(text_response)
 
     model_dump = getattr(response, "model_dump", None)
     if callable(model_dump):
@@ -328,8 +342,8 @@ def extract_llm_summary(response):
         message = getattr(choices[0], "message", None)
         content = getattr(message, "content", None)
 
-    if isinstance(content, str) and content.strip():
-        return content.strip()
+    if isinstance(content, str):
+        return validate_llm_summary(content)
     if isinstance(content, list):
         text_parts = [
             item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
@@ -337,7 +351,7 @@ def extract_llm_summary(response):
         ]
         joined_text = "".join(text_parts).strip()
         if joined_text:
-            return joined_text
+            return validate_llm_summary(joined_text)
     raise RuntimeError("LLM 响应中缺少可用的 message.content。")
 
 

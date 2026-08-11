@@ -104,6 +104,12 @@ class PaperTrackerTest(unittest.TestCase):
             paper_tracker.extract_llm_summary("  **问题**：代理返回的阅读笔记  "),
         )
 
+    def test_llm_summary_rejects_html_page(self):
+        with self.assertRaisesRegex(RuntimeError, "HTML 页面"):
+            paper_tracker.extract_llm_summary(
+                "<!doctype html><html><body>4Router</body></html>"
+            )
+
     def test_llm_summary_accepts_openai_json(self):
         response = {"choices": [{"message": {"content": "**方法**：JSON 响应"}}]}
 
