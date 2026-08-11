@@ -1,6 +1,6 @@
 # 每日学术论文追踪器
 
-这是一个通过 GitHub Actions 每天自动运行的论文追踪器：使用官方 Semantic Scholar API 按关键词检索，按来源优先级筛选，再将结构化中文阅读笔记推送到 Server 酱。
+这是一个通过 GitHub Actions 每天自动运行的论文追踪器：使用官方 Semantic Scholar API 按关键词检索，按来源优先级筛选，再将结构化中文阅读笔记推送到飞书机器人。
 
 ## 当前定制
 
@@ -18,10 +18,12 @@
 在仓库的 `Settings` → `Secrets and variables` → `Actions` 添加以下两个 Secret：
 
 - `S2_API_Key`：官方 Semantic Scholar API Key。
+- `S2_PROXY_API_KEY`：可选。仅当官方 S2 API 连续失败时使用的代理 API Key。
 - `LLM_API_KEY`：4Router 的 API Key。
-- `SERVERCHAN_KEY`：Server 酱 SendKey。
+- `FEISHU_BOT_WEBHOOK`：飞书机器人 Webhook 完整地址。
+- `FEISHU_BOT_SIGNKEY`：飞书机器人签名密钥。
 
-脚本通过官方 `https://api.semanticscholar.org/graph/v1` 接口访问 Semantic Scholar，并在进程内将请求严格节流为每秒至多一次；官方服务持续不可用时自动回退到 arXiv 公开 API。
+脚本优先使用官方 `https://api.semanticscholar.org/graph/v1` 接口，并在进程内将请求严格节流为每秒至多一次；官方服务连续失败时依次回退到配置的 S2 代理和 arXiv。arXiv 请求间隔至少 3 秒，并对 `429` 自动退避重试。
 
 ### 论文偏好
 
@@ -45,5 +47,5 @@
 
 ```bash
 pip install requests openai
-LLM_API_KEY=your_key SERVERCHAN_KEY=your_sendkey python3 paper_tracker.py
+S2_API_Key=your_s2_key LLM_API_KEY=your_llm_key FEISHU_BOT_WEBHOOK=your_webhook FEISHU_BOT_SIGNKEY=your_signkey python3 paper_tracker.py
 ```

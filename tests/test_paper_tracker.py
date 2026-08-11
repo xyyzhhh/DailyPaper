@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import unittest
 from datetime import date
 from unittest.mock import Mock, patch
@@ -80,6 +83,43 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual(1, mock_semantic_scholar.call_count)
         self.assertEqual(2, mock_arxiv.call_count)
 
+    @patch("paper_tracker.request_arxiv")
+    @patch("paper_tracker.request_s2_proxy")
+    @patch("paper_tracker.request_semantic_scholar", return_value=None)
+    @patch("paper_tracker.read_list", return_value=[])
+    def test_official_s2_failure_falls_back_to_proxy_before_arxiv(
+        self, mock_read_list, mock_official_s2, mock_proxy_s2, mock_arxiv
+    ):
+        today = date.today()
+        mock_proxy_s2.return_value = {
+            "data": [
+                {
+                    "paperId": "proxy-paper",
+                    "title": "Proxy Result",
+                    "abstract": "A usable abstract.",
+                    "authors": [],
+                    "venue": "arXiv",
+                    "externalIds": {},
+                    "publicationDate": today.isoformat(),
+                    "year": today.year,
+                    "citationCount": 0,
+                }
+            ]
+        }
+        preferences = dict(self.preferences)
+        preferences["topics"] = [{"name": "主题", "queries": ["query"]}]
+
+        with (
+            patch("paper_tracker.load_preferences", return_value=preferences),
+            patch.object(paper_tracker, "S2_PROXY_API_KEY", "test-proxy-token"),
+        ):
+            papers = paper_tracker.get_paper_recommendations()
+
+        self.assertEqual(1, len(papers))
+        mock_official_s2.assert_called_once()
+        mock_proxy_s2.assert_called_once()
+        mock_arxiv.assert_not_called()
+
     def test_venue_details_include_abbreviation_and_ccf_rank(self):
         venue_name, abbreviation, ccf_rank = paper_tracker.get_venue_details(
             {"venue": "Conference on Empirical Methods in Natural Language Processing"},
@@ -145,6 +185,65 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual("test-s2-token", request_headers["x-api-key"])
         self.assertNotIn("Authorization", request_headers)
         mock_wait.assert_called_once()
+
+    @patch("paper_tracker.requests.get")
+    def test_s2_proxy_uses_bearer_token_and_proxy_url(self, mock_get):
+        response = Mock(status_code=200)
+        response.json.return_value = {"data": []}
+        mock_get.return_value = response
+
+        with patch.object(paper_tracker, "S2_PROXY_API_KEY", "test-proxy-token"):
+            result = paper_tracker.request_s2_proxy({"query": "watermarking"})
+
+        self.assertEqual({"data": []}, result)
+        request_url = mock_get.call_args.args[0]
+        request_headers = mock_get.call_args.kwargs["headers"]
+        self.assertEqual(
+            "https://s2api.ominiai.cn/s2/graph/v1/paper/search", request_url
+        )
+        self.assertEqual("Bearer test-proxy-token", request_headers["Authorization"])
+
+    @patch("paper_tracker.wait_for_arxiv_rate_limit")
+    @patch("paper_tracker.time.sleep")
+    @patch("paper_tracker.requests.get")
+    def test_arxiv_retries_after_rate_limit(self, mock_get, mock_sleep, mock_wait):
+        rate_limited_response = Mock(status_code=429, headers={}, text="rate limited")
+        success_response = Mock(
+            status_code=200,
+            content=b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" />',
+        )
+        mock_get.side_effect = [rate_limited_response, success_response]
+
+        self.assertEqual([], paper_tracker.request_arxiv("watermarking", 1))
+        self.assertEqual(2, mock_get.call_count)
+        mock_sleep.assert_called_once_with(3)
+        self.assertEqual(2, mock_wait.call_count)
+
+    @patch("paper_tracker.requests.post")
+    def test_feishu_push_uses_signed_interactive_card(self, mock_post):
+        response = Mock()
+        response.json.return_value = {"code": 0}
+        mock_post.return_value = response
+
+        with (
+            patch.object(paper_tracker, "FEISHU_BOT_WEBHOOK", "https://example.test/hook"),
+            patch.object(paper_tracker, "FEISHU_BOT_SIGNKEY", "sign-key"),
+            patch("paper_tracker.time.time", return_value=123),
+        ):
+            paper_tracker.push_to_feishu("日报正文")
+
+        expected_sign = base64.b64encode(
+            hmac.new(b"123\nsign-key", digestmod=hashlib.sha256).digest()
+        ).decode("utf-8")
+        self.assertEqual("https://example.test/hook", mock_post.call_args.args[0])
+        self.assertEqual(expected_sign, mock_post.call_args.kwargs["json"]["sign"])
+        self.assertEqual(
+            "日报正文",
+            mock_post.call_args.kwargs["json"]["card"]["elements"][0]["content"],
+        )
+
+    def test_empty_report_is_sent_as_status_notification(self):
+        self.assertIn("未发现", paper_tracker.build_empty_report())
 
     def test_llm_summary_accepts_proxy_plain_text(self):
         self.assertEqual(

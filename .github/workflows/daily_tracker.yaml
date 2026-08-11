@@ -27,8 +27,10 @@ jobs:
       - name: Run Script
         env:
           S2_API_Key: ${{ secrets.S2_API_Key }}
+          S2_PROXY_API_KEY: ${{ secrets.S2_PROXY_API_KEY }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          FEISHU_BOT_SIGNKEY: ${{ secrets.FEISHU_BOT_SIGNKEY }}
         run: python3 paper_tracker.py
 
       - name: Commit and push history

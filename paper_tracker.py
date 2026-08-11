@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import json
 import os
 import time
@@ -8,13 +11,16 @@ import requests
 from openai import OpenAI
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
-SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY")
 S2_API_KEY = os.getenv("S2_API_Key") or os.getenv("S2_API_KEY")
+S2_PROXY_API_KEY = os.getenv("S2_PROXY_API_KEY")
+FEISHU_BOT_WEBHOOK = os.getenv("FEISHU_BOT_WEBHOOK")
+FEISHU_BOT_SIGNKEY = os.getenv("FEISHU_BOT_SIGNKEY")
 
 HISTORY_FILE = "config/seen_papers.txt"
 BLACKLIST_FILE = "config/blacklisted_venues.txt"
 PREFERENCES_FILE = "config/paper_preferences.json"
 SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+S2_PROXY_SEARCH_URL = "https://s2api.ominiai.cn/s2/graph/v1/paper/search"
 ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://4router.net/v1").rstrip("/")
 LLM_MODEL = "gpt-5.6-sol"
@@ -22,6 +28,8 @@ REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_RETRIES = 3
 S2_MIN_REQUEST_INTERVAL_SECONDS = 1.0
 LAST_S2_REQUEST_TIME = None
+ARXIV_MIN_REQUEST_INTERVAL_SECONDS = 3.0
+LAST_ARXIV_REQUEST_TIME = None
 
 
 def read_list(file_path):
@@ -117,24 +125,90 @@ def request_semantic_scholar(params):
     return None
 
 
+def request_s2_proxy(params):
+    """当官方 S2 持续失败时，通过可选代理 API 请求同一 Graph 接口。"""
+    if not S2_PROXY_API_KEY:
+        print("未配置 S2_PROXY_API_KEY，跳过 S2 代理备用源。")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {S2_PROXY_API_KEY}",
+        "User-Agent": "DailyPaper keyword tracker",
+    }
+    for attempt in range(REQUEST_RETRIES):
+        try:
+            response = requests.get(
+                S2_PROXY_SEARCH_URL,
+                params=params,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as error:
+            print(f"S2 代理网络请求失败：{error}")
+            return None
+
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            print(f"S2 代理请求失败 ({response.status_code})：{response.text[:300]}")
+            return None
+
+        retry_after = response.headers.get("Retry-After")
+        wait_seconds = float(retry_after) if retry_after and retry_after.isdigit() else 2**attempt
+        print(f"S2 代理暂时不可用 ({response.status_code})，{wait_seconds} 秒后重试...")
+        time.sleep(wait_seconds)
+
+    print("S2 代理持续不可用，将改用 arXiv 备用检索。")
+    return None
+
+
+def wait_for_arxiv_rate_limit():
+    """遵守 arXiv 公开 API 的保守请求间隔，减少 429。"""
+    global LAST_ARXIV_REQUEST_TIME
+
+    now = time.monotonic()
+    if LAST_ARXIV_REQUEST_TIME is not None:
+        remaining_seconds = ARXIV_MIN_REQUEST_INTERVAL_SECONDS - (
+            now - LAST_ARXIV_REQUEST_TIME
+        )
+        if remaining_seconds > 0:
+            time.sleep(remaining_seconds)
+    LAST_ARXIV_REQUEST_TIME = time.monotonic()
+
+
 def request_arxiv(query, max_results):
     """通过 arXiv 的公开 API 搜索备用论文，并统一成 Semantic Scholar 字段。"""
-    try:
-        response = requests.get(
-            ARXIV_SEARCH_URL,
-            params={
-                "search_query": f'all:"{query.replace(chr(34), "")}"',
-                "start": 0,
-                "max_results": max_results,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            },
-            headers={"User-Agent": "DailyPaper keyword tracker"},
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-    except requests.RequestException as error:
-        print(f"arXiv 备用检索失败：{error}")
+    for attempt in range(REQUEST_RETRIES):
+        try:
+            wait_for_arxiv_rate_limit()
+            response = requests.get(
+                ARXIV_SEARCH_URL,
+                params={
+                    "search_query": f'all:"{query.replace(chr(34), "")}"',
+                    "start": 0,
+                    "max_results": max_results,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                },
+                headers={"User-Agent": "DailyPaper keyword tracker"},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as error:
+            print(f"arXiv 备用检索网络失败：{error}")
+            return []
+
+        if response.status_code == 200:
+            break
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            print(f"arXiv 备用检索失败 ({response.status_code})：{response.text[:300]}")
+            return []
+
+        retry_after = response.headers.get("Retry-After")
+        wait_seconds = float(retry_after) if retry_after and retry_after.isdigit() else 3 * (attempt + 1)
+        print(f"arXiv 暂时不可用 ({response.status_code})，{wait_seconds} 秒后重试...")
+        time.sleep(wait_seconds)
+    else:
+        print("arXiv 连续请求失败，本次跳过该关键词。")
         return []
 
     atom_namespace = {"atom": "http://www.w3.org/2005/Atom"}
@@ -287,6 +361,7 @@ def get_paper_recommendations():
 
     print(f"检索 {earliest_date.isoformat()} 以来的关键词论文...")
     semantic_scholar_available = True
+    s2_proxy_available = bool(S2_PROXY_API_KEY)
     for topic in preferences["topics"]:
         topic_name = topic["name"]
         for query in topic["queries"]:
@@ -302,10 +377,43 @@ def get_paper_recommendations():
                 )
                 if result is None:
                     semantic_scholar_available = False
+                    if s2_proxy_available:
+                        print("切换到 S2 代理备用检索。")
+                        result = request_s2_proxy(
+                            {
+                                "query": query,
+                                "limit": preferences["max_results_per_query"],
+                                "fields": fields,
+                            }
+                        )
+                        if result is None:
+                            s2_proxy_available = False
+                            print("切换到 arXiv 免 Key 备用检索。")
+                            raw_papers = request_arxiv(
+                                query, preferences["max_results_per_query"]
+                            )
+                        else:
+                            raw_papers = result.get("data", [])
+                    else:
+                        print("切换到 arXiv 免 Key 备用检索。")
+                        raw_papers = request_arxiv(
+                            query, preferences["max_results_per_query"]
+                        )
+                else:
+                    raw_papers = result.get("data", [])
+            elif s2_proxy_available:
+                print("来源：S2 代理备用服务")
+                result = request_s2_proxy(
+                    {
+                        "query": query,
+                        "limit": preferences["max_results_per_query"],
+                        "fields": fields,
+                    }
+                )
+                if result is None:
+                    s2_proxy_available = False
                     print("切换到 arXiv 免 Key 备用检索。")
-                    raw_papers = request_arxiv(
-                        query, preferences["max_results_per_query"]
-                    )
+                    raw_papers = request_arxiv(query, preferences["max_results_per_query"])
                 else:
                     raw_papers = result.get("data", [])
             else:
@@ -476,17 +584,50 @@ def update_history(papers):
             file.write(f"{paper['paperId']}\n")
 
 
-def push_to_wechat(content):
-    """通过 Server 酱推送到微信。"""
-    if not SERVERCHAN_KEY:
-        raise RuntimeError("缺少 SERVERCHAN_KEY GitHub Secret。")
+def build_feishu_payload(content, timestamp=None):
+    """构造带签名的飞书机器人交互卡片消息。"""
+    if not FEISHU_BOT_SIGNKEY:
+        raise RuntimeError("缺少 FEISHU_BOT_SIGNKEY GitHub Secret。")
+
+    timestamp = str(timestamp or int(time.time()))
+    string_to_sign = f"{timestamp}\n{FEISHU_BOT_SIGNKEY}".encode("utf-8")
+    sign = base64.b64encode(
+        hmac.new(string_to_sign, digestmod=hashlib.sha256).digest()
+    ).decode("utf-8")
+    return {
+        "timestamp": timestamp,
+        "sign": sign,
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "📚 每日论文追踪"},
+                "template": "blue",
+            },
+            "elements": [{"tag": "markdown", "content": content}],
+        },
+    }
+
+
+def push_to_feishu(content):
+    """通过飞书机器人 Webhook 推送带签名的交互卡片。"""
+    if not FEISHU_BOT_WEBHOOK:
+        raise RuntimeError("缺少 FEISHU_BOT_WEBHOOK GitHub Secret。")
 
     response = requests.post(
-        f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send",
-        data={"title": "📚 每日论文追踪", "desp": content},
+        FEISHU_BOT_WEBHOOK,
+        json=build_feishu_payload(content),
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
+    response_body = response.json()
+    if response_body.get("code") not in {None, 0}:
+        raise RuntimeError(f"飞书机器人推送失败：{response_body}")
+
+
+def build_empty_report():
+    """生成无新论文时仍需发送的日报内容。"""
+    return "## 今日论文追踪\n\n本次检索未发现符合条件且未推送过的新论文。"
 
 
 if __name__ == "__main__":
@@ -495,9 +636,12 @@ if __name__ == "__main__":
     if new_papers:
         print(f"找到 {len(new_papers)} 篇论文，正在使用 {LLM_MODEL} 总结...")
         report = summarize_papers_with_llm(new_papers)
-        print("正在推送到微信...")
-        push_to_wechat(report)
-        update_history(new_papers)
-        print("全部完成！")
     else:
-        print("今天没有发现未读的最新相关论文。")
+        print("今天没有发现未读的最新相关论文，仍将发送状态通知。")
+        report = build_empty_report()
+
+    print("正在推送到飞书...")
+    push_to_feishu(report)
+    if new_papers:
+        update_history(new_papers)
+    print("全部完成！")
