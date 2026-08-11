@@ -9,11 +9,17 @@ from openai import OpenAI
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY")
+S2_PROXY_API_KEY = os.getenv(
+    "S2_PROXY_API_KEY", "sk-EjxPNyglgeZrjtHZ1cAAZHUpZr5HHuYPutfkCrOz8sGnAfij"
+)
 
 HISTORY_FILE = "config/seen_papers.txt"
 BLACKLIST_FILE = "config/blacklisted_venues.txt"
 PREFERENCES_FILE = "config/paper_preferences.json"
-SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+S2_PROXY_BASE_URL = os.getenv("S2_PROXY_BASE_URL", "https://s2api.ominiai.cn/s2").rstrip(
+    "/"
+)
+SEMANTIC_SCHOLAR_SEARCH_URL = f"{S2_PROXY_BASE_URL}/graph/v1/paper/search"
 ARXIV_SEARCH_URL = "https://export.arxiv.org/api/query"
 LLM_BASE_URL = "https://4Router.net"
 LLM_MODEL = "gpt-5.6-sol"
@@ -52,8 +58,11 @@ def load_preferences():
 
 
 def request_semantic_scholar(params):
-    """请求 Semantic Scholar；限流或网络故障时返回 None 以启用备用源。"""
-    headers = {"User-Agent": "DailyPaper keyword tracker"}
+    """通过 S2 代理请求 Semantic Scholar；失败时返回 None 以启用备用源。"""
+    headers = {
+        "Authorization": f"Bearer {S2_PROXY_API_KEY}",
+        "User-Agent": "DailyPaper keyword tracker",
+    }
     for attempt in range(REQUEST_RETRIES):
         try:
             response = requests.get(
@@ -63,7 +72,7 @@ def request_semantic_scholar(params):
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except requests.RequestException as error:
-            print(f"Semantic Scholar 网络请求失败：{error}")
+            print(f"S2 代理网络请求失败：{error}")
             return None
 
         if response.status_code == 200:
@@ -71,23 +80,23 @@ def request_semantic_scholar(params):
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             retry_message = f"，建议等待 {retry_after} 秒" if retry_after else ""
-            print(f"Semantic Scholar 公共额度被限流 (429){retry_message}。")
+            print(f"S2 代理请求被限流 (429){retry_message}。")
             return None
         if response.status_code not in {500, 502, 503, 504}:
             print(
-                f"Semantic Scholar 请求失败 ({response.status_code})："
+                f"S2 代理请求失败 ({response.status_code})："
                 f"{response.text[:300]}"
             )
             return None
 
         wait_seconds = 2**attempt
         print(
-            f"Semantic Scholar 暂时不可用 ({response.status_code})，"
+            f"S2 代理暂时不可用 ({response.status_code})，"
             f"{wait_seconds} 秒后重试..."
         )
         time.sleep(wait_seconds)
 
-    print("Semantic Scholar 持续不可用，将改用 arXiv 备用检索。")
+    print("S2 代理持续不可用，将改用 arXiv 备用检索。")
     return None
 
 
@@ -224,13 +233,13 @@ def get_paper_recommendations():
     )
 
     print(f"检索 {earliest_date.isoformat()} 以来的关键词论文...")
-    semantic_scholar_available = True
+    s2_proxy_available = True
     for topic in preferences["topics"]:
         topic_name = topic["name"]
         query = topic["query"]
         print(f"检索主题：{topic_name} ({query})")
-        if semantic_scholar_available:
-            print("来源：Semantic Scholar 免 Key 公共额度")
+        if s2_proxy_available:
+            print("来源：S2 代理服务")
             result = request_semantic_scholar(
                 {
                     "query": query,
@@ -239,7 +248,7 @@ def get_paper_recommendations():
                 }
             )
             if result is None:
-                semantic_scholar_available = False
+                s2_proxy_available = False
                 print("切换到 arXiv 免 Key 备用检索。")
                 raw_papers = request_arxiv(query, preferences["max_results_per_query"])
             else:

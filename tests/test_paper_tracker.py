@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import paper_tracker
 
@@ -79,6 +79,24 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual(["主题一", "主题二"], papers[0]["matchedTopics"])
         self.assertEqual(1, mock_semantic_scholar.call_count)
         self.assertEqual(2, mock_arxiv.call_count)
+
+    @patch("paper_tracker.requests.get")
+    def test_s2_proxy_uses_bearer_token_and_proxy_url(self, mock_get):
+        response = Mock(status_code=200)
+        response.json.return_value = {"data": []}
+        mock_get.return_value = response
+
+        with patch.object(paper_tracker, "S2_PROXY_API_KEY", "test-proxy-token"):
+            result = paper_tracker.request_semantic_scholar({"query": "watermarking"})
+
+        self.assertEqual({"data": []}, result)
+        request_url = mock_get.call_args.args[0]
+        request_headers = mock_get.call_args.kwargs["headers"]
+        self.assertEqual(
+            "https://s2api.ominiai.cn/s2/graph/v1/paper/search", request_url
+        )
+        self.assertEqual("Bearer test-proxy-token", request_headers["Authorization"])
+        self.assertNotIn("x-api-key", request_headers)
 
 
 if __name__ == "__main__":

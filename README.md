@@ -1,6 +1,6 @@
 # 每日学术论文追踪器
 
-这是一个通过 GitHub Actions 每天自动运行的论文追踪器：使用 Semantic Scholar 的免 Key 公共额度按关键词检索，按来源优先级筛选，再将结构化中文阅读笔记推送到 Server 酱。
+这是一个通过 GitHub Actions 每天自动运行的论文追踪器：使用 S2 代理访问 Semantic Scholar 按关键词检索，按来源优先级筛选，再将结构化中文阅读笔记推送到 Server 酱。
 
 ## 当前定制
 
@@ -17,10 +17,11 @@
 
 在仓库的 `Settings` → `Secrets and variables` → `Actions` 添加以下两个 Secret：
 
+- `S2_PROXY_API_KEY`：S2 代理 API Key；在 GitHub Actions 中应配置为 Secret，覆盖代码的本地默认值。
 - `LLM_API_KEY`：4Router 的 API Key。
 - `SERVERCHAN_KEY`：Server 酱 SendKey。
 
-无需添加 `S2_API_KEY`。脚本仅使用 Semantic Scholar 官方提供的无 Key 公共额度，并对短暂限流自动重试。
+无需添加 `S2_API_KEY`。脚本通过 `https://s2api.ominiai.cn/s2` 代理访问 Semantic Scholar，并在代理不可用时自动回退到 arXiv 公开 API。
 
 ### 论文偏好
 
