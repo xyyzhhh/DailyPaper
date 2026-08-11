@@ -69,8 +69,8 @@ class PaperTrackerTest(unittest.TestCase):
 
         preferences = dict(self.preferences)
         preferences["topics"] = [
-            {"name": "主题一", "query": "query one"},
-            {"name": "主题二", "query": "query two"},
+            {"name": "主题一", "queries": ["query one"]},
+            {"name": "主题二", "queries": ["query two"]},
         ]
         with patch("paper_tracker.load_preferences", return_value=preferences):
             papers = paper_tracker.get_paper_recommendations()
@@ -79,6 +79,27 @@ class PaperTrackerTest(unittest.TestCase):
         self.assertEqual(["主题一", "主题二"], papers[0]["matchedTopics"])
         self.assertEqual(1, mock_semantic_scholar.call_count)
         self.assertEqual(2, mock_arxiv.call_count)
+
+    def test_venue_details_include_abbreviation_and_ccf_rank(self):
+        venue_name, abbreviation, ccf_rank = paper_tracker.get_venue_details(
+            {"venue": "Conference on Empirical Methods in Natural Language Processing"},
+            self.preferences,
+        )
+
+        self.assertEqual("Conference on Empirical Methods in Natural Language Processing", venue_name)
+        self.assertEqual("EMNLP", abbreviation)
+        self.assertEqual("B", ccf_rank)
+
+    def test_unknown_venue_is_marked_not_in_ccf(self):
+        _, abbreviation, ccf_rank = paper_tracker.get_venue_details(
+            {"venue": "Unlisted Research Venue"}, self.preferences
+        )
+
+        self.assertEqual("—", abbreviation)
+        self.assertEqual("未收录", ccf_rank)
+
+    def test_daily_digest_limit_is_three(self):
+        self.assertEqual(3, self.preferences["max_papers_per_digest"])
 
     @patch("paper_tracker.requests.get")
     def test_s2_proxy_uses_bearer_token_and_proxy_url(self, mock_get):

@@ -6,9 +6,9 @@
 
 - **运行频率**：每天 08:00（中国标准时间，UTC+8）；也可在 Actions 页面手动运行。
 - **检索方式**：关键词匹配，不再依赖正向或负向 seed paper。
-- **研究方向**：大模型水印、大模型指纹、LLM 账号与用户识别、用户识别、医学肠道内镜模型。
+- **研究方向**：大语言模型/生成式模型水印、大模型指纹与模型溯源、LLM 账号/用户/作者识别、医学肠道内镜模型。
 - **优先来源**：网络安全 CCF A → 人工智能 CCF A / EMNLP → 高影响力期刊 → 其他会议或期刊 → arXiv。
-- **阅读笔记**：每篇均包含作者、会议/期刊、发表时间、匹配方向以及“问题—方法—结果—局限—可复用点”。
+- **阅读笔记**：每天至多推送 3 篇；每篇均包含作者、会议/期刊缩写、CCF 等级、发表时间、匹配方向以及“问题—方法—结果—局限—可复用点”。
 - **模型**：通过 OpenAI 兼容端点 `https://4router.net/v1` 调用 `gpt-5.6-sol`。
 
 ## 配置
@@ -27,9 +27,8 @@
 
 在 `config/paper_preferences.json` 中可以修改：
 
-- `topics`：研究方向名称与对应英文检索关键词。
-- `preferred_security_venues`：网络安全 CCF A 会议别名。
-- `preferred_ai_venues`：人工智能 CCF A 与 EMNLP 会议别名。
+- `topics`：研究方向名称与对应的多条英文检索关键词。
+- `venue_metadata`：会议/期刊别名、缩写、CCF 等级与来源优先级。
 - `high_impact_journals`：优先收录的高影响力期刊别名。
 - `search_lookback_days`：每次检索的回溯窗口，默认 30 天。
 - `max_results_per_query`、`max_papers_per_digest`：单个关键词查询量和每日推送上限。

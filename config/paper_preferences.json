@@ -1,48 +1,204 @@
 {
   "search_lookback_days": 30,
-  "max_results_per_query": 100,
-  "max_papers_per_digest": 10,
+  "max_results_per_query": 30,
+  "max_papers_per_digest": 3,
   "topics": [
     {
-      "name": "大模型水印",
-      "query": "large language model watermarking"
+      "name": "大语言模型/生成式模型水印",
+      "queries": [
+        "LLM watermarking",
+        "text watermarking",
+        "generative model watermarking",
+        "watermark robustness removal detection"
+      ]
     },
     {
-      "name": "大模型指纹",
-      "query": "large language model fingerprinting"
+      "name": "大模型指纹与模型溯源",
+      "queries": [
+        "LLM fingerprinting",
+        "model fingerprinting",
+        "model attribution provenance ownership verification"
+      ]
     },
     {
-      "name": "LLM 账号与用户识别",
-      "query": "large language model account user identification"
-    },
-    {
-      "name": "用户识别",
-      "query": "user identification"
+      "name": "LLM 账号、用户与作者识别（隐私/安全/滥用风险）",
+      "queries": [
+        "LLM account identification",
+        "user identification authorship attribution",
+        "behavioral identification identity inference"
+      ]
     },
     {
       "name": "医学肠道内镜模型",
-      "query": "gastrointestinal endoscopy deep learning"
+      "queries": [
+        "gastrointestinal endoscopy",
+        "colonoscopy gastroscopy capsule endoscopy",
+        "polyp detection segmentation classification",
+        "clinical foundation models endoscopy"
+      ]
     }
   ],
-  "preferred_security_venues": [
-    "IEEE Symposium on Security and Privacy",
-    "USENIX Security Symposium",
-    "ACM SIGSAC Conference on Computer and Communications Security",
-    "Network and Distributed System Security Symposium",
-    "NDSS"
-  ],
-  "preferred_ai_venues": [
-    "AAAI Conference on Artificial Intelligence",
-    "Conference on Neural Information Processing Systems",
-    "NeurIPS",
-    "International Conference on Machine Learning",
-    "ICML",
-    "International Joint Conference on Artificial Intelligence",
-    "IJCAI",
-    "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
-    "CVPR",
-    "Conference on Empirical Methods in Natural Language Processing",
-    "EMNLP"
+  "venue_metadata": [
+    {
+      "name": "IEEE Symposium on Security and Privacy",
+      "abbreviation": "S&P",
+      "ccf_rank": "A",
+      "source_priority": 4,
+      "source_label": "网络安全 CCF A",
+      "aliases": ["IEEE Symposium on Security and Privacy", "IEEE S&P", "Oakland"]
+    },
+    {
+      "name": "USENIX Security Symposium",
+      "abbreviation": "USENIX Security",
+      "ccf_rank": "A",
+      "source_priority": 4,
+      "source_label": "网络安全 CCF A",
+      "aliases": ["USENIX Security Symposium", "USENIX Security"]
+    },
+    {
+      "name": "ACM SIGSAC Conference on Computer and Communications Security",
+      "abbreviation": "CCS",
+      "ccf_rank": "A",
+      "source_priority": 4,
+      "source_label": "网络安全 CCF A",
+      "aliases": ["ACM SIGSAC Conference on Computer and Communications Security", "ACM CCS", "CCS"]
+    },
+    {
+      "name": "Network and Distributed System Security Symposium",
+      "abbreviation": "NDSS",
+      "ccf_rank": "A",
+      "source_priority": 4,
+      "source_label": "网络安全 CCF A",
+      "aliases": ["Network and Distributed System Security Symposium", "NDSS"]
+    },
+    {
+      "name": "AAAI Conference on Artificial Intelligence",
+      "abbreviation": "AAAI",
+      "ccf_rank": "A",
+      "source_priority": 3,
+      "source_label": "人工智能 CCF A",
+      "aliases": ["AAAI Conference on Artificial Intelligence", "AAAI"]
+    },
+    {
+      "name": "Conference on Neural Information Processing Systems",
+      "abbreviation": "NeurIPS",
+      "ccf_rank": "A",
+      "source_priority": 3,
+      "source_label": "人工智能 CCF A",
+      "aliases": ["Conference on Neural Information Processing Systems", "NeurIPS", "NIPS"]
+    },
+    {
+      "name": "International Conference on Machine Learning",
+      "abbreviation": "ICML",
+      "ccf_rank": "A",
+      "source_priority": 3,
+      "source_label": "人工智能 CCF A",
+      "aliases": ["International Conference on Machine Learning", "ICML"]
+    },
+    {
+      "name": "International Joint Conference on Artificial Intelligence",
+      "abbreviation": "IJCAI",
+      "ccf_rank": "A",
+      "source_priority": 3,
+      "source_label": "人工智能 CCF A",
+      "aliases": ["International Joint Conference on Artificial Intelligence", "IJCAI"]
+    },
+    {
+      "name": "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+      "abbreviation": "CVPR",
+      "ccf_rank": "A",
+      "source_priority": 3,
+      "source_label": "人工智能 CCF A",
+      "aliases": ["IEEE/CVF Conference on Computer Vision and Pattern Recognition", "CVPR"]
+    },
+    {
+      "name": "Annual Meeting of the Association for Computational Linguistics",
+      "abbreviation": "ACL",
+      "ccf_rank": "A",
+      "source_priority": 3,
+      "source_label": "人工智能 CCF A",
+      "aliases": ["Annual Meeting of the Association for Computational Linguistics", "ACL"]
+    },
+    {
+      "name": "Conference on Empirical Methods in Natural Language Processing",
+      "abbreviation": "EMNLP",
+      "ccf_rank": "B",
+      "source_priority": 3,
+      "source_label": "人工智能重点会议（EMNLP）",
+      "aliases": ["Conference on Empirical Methods in Natural Language Processing", "EMNLP"]
+    },
+    {
+      "name": "IEEE Transactions on Pattern Analysis and Machine Intelligence",
+      "abbreviation": "TPAMI",
+      "ccf_rank": "A",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["IEEE Transactions on Pattern Analysis and Machine Intelligence", "TPAMI"]
+    },
+    {
+      "name": "Journal of Machine Learning Research",
+      "abbreviation": "JMLR",
+      "ccf_rank": "A",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["Journal of Machine Learning Research", "JMLR"]
+    },
+    {
+      "name": "Artificial Intelligence",
+      "abbreviation": "AIJ",
+      "ccf_rank": "A",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["Artificial Intelligence"]
+    },
+    {
+      "name": "IEEE Transactions on Information Forensics and Security",
+      "abbreviation": "TIFS",
+      "ccf_rank": "B",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["IEEE Transactions on Information Forensics and Security", "TIFS"]
+    },
+    {
+      "name": "IEEE Transactions on Dependable and Secure Computing",
+      "abbreviation": "TDSC",
+      "ccf_rank": "B",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["IEEE Transactions on Dependable and Secure Computing", "TDSC"]
+    },
+    {
+      "name": "IEEE Transactions on Medical Imaging",
+      "abbreviation": "TMI",
+      "ccf_rank": "未收录",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["IEEE Transactions on Medical Imaging", "TMI"]
+    },
+    {
+      "name": "Medical Image Analysis",
+      "abbreviation": "MedIA",
+      "ccf_rank": "未收录",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["Medical Image Analysis", "MedIA"]
+    },
+    {
+      "name": "Gastrointestinal Endoscopy",
+      "abbreviation": "GIE",
+      "ccf_rank": "未收录",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["Gastrointestinal Endoscopy"]
+    },
+    {
+      "name": "Endoscopy",
+      "abbreviation": "Endoscopy",
+      "ccf_rank": "未收录",
+      "source_priority": 2,
+      "source_label": "高影响力期刊",
+      "aliases": ["Endoscopy"]
+    }
   ],
   "high_impact_journals": [
     "Nature Machine Intelligence",

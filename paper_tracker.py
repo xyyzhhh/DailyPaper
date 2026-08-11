@@ -42,8 +42,7 @@ def load_preferences():
 
     required_keys = {
         "topics",
-        "preferred_security_venues",
-        "preferred_ai_venues",
+        "venue_metadata",
         "high_impact_journals",
         "search_lookback_days",
         "max_results_per_query",
@@ -174,10 +173,11 @@ def paper_date(paper):
 def get_venue_name(paper):
     """兼容 Semantic Scholar 的 venue 与 publicationVenue 字段。"""
     publication_venue = paper.get("publicationVenue") or {}
+    alternate_names = publication_venue.get("alternate_names") or []
     return (
         paper.get("venue")
         or publication_venue.get("name")
-        or publication_venue.get("alternate_names", [""])[0]
+        or (alternate_names[0] if alternate_names else "")
         or "未知会议/期刊"
     ).strip()
 
@@ -187,15 +187,36 @@ def matches_any(venue_name, aliases):
     return any(alias.lower() in normalized_venue for alias in aliases)
 
 
+def get_venue_metadata(venue_name, preferences):
+    """按最长别名匹配会议/期刊的缩写、CCF 等级和来源优先级。"""
+    venue_metadata = preferences["venue_metadata"]
+    for metadata in venue_metadata:
+        aliases = metadata.get("aliases", [])
+        if any(
+            alias.lower() in venue_name.lower()
+            for alias in sorted(aliases, key=len, reverse=True)
+        ):
+            return metadata
+    return None
+
+
+def get_venue_details(paper, preferences):
+    """返回显示在日报中的会议/期刊名称、缩写与 CCF 等级。"""
+    venue_name = get_venue_name(paper)
+    metadata = get_venue_metadata(venue_name, preferences)
+    if metadata:
+        return venue_name, metadata["abbreviation"], metadata["ccf_rank"]
+    return venue_name, "—", "未收录"
+
+
 def source_priority(paper, preferences):
     """按照用户指定的来源优先级返回可排序的分组和中文标签。"""
     venue_name = get_venue_name(paper)
     external_ids = paper.get("externalIds") or {}
+    metadata = get_venue_metadata(venue_name, preferences)
 
-    if matches_any(venue_name, preferences["preferred_security_venues"]):
-        return 4, "网络安全 CCF A"
-    if matches_any(venue_name, preferences["preferred_ai_venues"]):
-        return 3, "人工智能 CCF A / EMNLP"
+    if metadata and "source_priority" in metadata:
+        return metadata["source_priority"], metadata["source_label"]
     if matches_any(venue_name, preferences["high_impact_journals"]):
         return 2, "高影响力期刊"
     if "ArXiv" in external_ids or "arxiv" in venue_name.lower():
@@ -236,42 +257,46 @@ def get_paper_recommendations():
     s2_proxy_available = True
     for topic in preferences["topics"]:
         topic_name = topic["name"]
-        query = topic["query"]
-        print(f"检索主题：{topic_name} ({query})")
-        if s2_proxy_available:
-            print("来源：S2 代理服务")
-            result = request_semantic_scholar(
-                {
-                    "query": query,
-                    "limit": preferences["max_results_per_query"],
-                    "fields": fields,
-                }
-            )
-            if result is None:
-                s2_proxy_available = False
-                print("切换到 arXiv 免 Key 备用检索。")
-                raw_papers = request_arxiv(query, preferences["max_results_per_query"])
+        for query in topic["queries"]:
+            print(f"检索主题：{topic_name} ({query})")
+            if s2_proxy_available:
+                print("来源：S2 代理服务")
+                result = request_semantic_scholar(
+                    {
+                        "query": query,
+                        "limit": preferences["max_results_per_query"],
+                        "fields": fields,
+                    }
+                )
+                if result is None:
+                    s2_proxy_available = False
+                    print("切换到 arXiv 免 Key 备用检索。")
+                    raw_papers = request_arxiv(
+                        query, preferences["max_results_per_query"]
+                    )
+                else:
+                    raw_papers = result.get("data", [])
             else:
-                raw_papers = result.get("data", [])
-        else:
-            print("来源：arXiv 免 Key 备用检索")
-            raw_papers = request_arxiv(query, preferences["max_results_per_query"])
+                print("来源：arXiv 免 Key 备用检索")
+                raw_papers = request_arxiv(query, preferences["max_results_per_query"])
 
-        for paper in raw_papers:
-            paper_id = paper.get("paperId")
-            if not paper_id or paper_id in seen_papers:
-                continue
-            if not (paper.get("abstract") or "").strip():
-                continue
-            if not is_recent_enough(paper, earliest_date):
-                continue
+            for paper in raw_papers:
+                paper_id = paper.get("paperId")
+                if not paper_id or paper_id in seen_papers:
+                    continue
+                if not (paper.get("abstract") or "").strip():
+                    continue
+                if not is_recent_enough(paper, earliest_date):
+                    continue
 
-            venue_name = get_venue_name(paper).lower()
-            if any(blocked_venue in venue_name for blocked_venue in blacklisted_venues):
-                continue
+                venue_name = get_venue_name(paper).lower()
+                if any(blocked_venue in venue_name for blocked_venue in blacklisted_venues):
+                    continue
 
-            stored_paper = papers_by_id.setdefault(paper_id, dict(paper))
-            stored_paper.setdefault("matchedTopics", []).append(topic_name)
+                stored_paper = papers_by_id.setdefault(paper_id, dict(paper))
+                matched_topics = stored_paper.setdefault("matchedTopics", [])
+                if topic_name not in matched_topics:
+                    matched_topics.append(topic_name)
 
     ranked_papers = sorted(
         papers_by_id.values(),
@@ -366,7 +391,7 @@ def summarize_papers_with_llm(papers):
     for index, paper in enumerate(papers, start=1):
         title = paper.get("title", "无标题")
         abstract = (paper.get("abstract") or "无摘要").strip()
-        venue_name = get_venue_name(paper)
+        venue_name, venue_abbreviation, ccf_rank = get_venue_details(paper, preferences)
         source_label = source_priority(paper, preferences)[1]
         authors = format_authors(paper.get("authors", []))
         publication_date = paper.get("publicationDate") or paper.get("year") or "未知日期"
@@ -393,7 +418,9 @@ def summarize_papers_with_llm(papers):
         report_parts.append(
             f"## {index}. [{title}]({url})\n"
             f"**作者：** {authors}\n\n"
-            f"**会议/期刊：** {venue_name}\n\n"
+            f"**会议/期刊：** {venue_name}"
+            f"{f'（{venue_abbreviation}）' if venue_abbreviation != '—' else ''}\n\n"
+            f"**CCF：** {ccf_rank}\n\n"
             f"**发表时间：** {publication_date}\n\n"
             f"**来源优先级：** {source_label}\n\n"
             f"**匹配研究方向：** {topics}\n\n"
